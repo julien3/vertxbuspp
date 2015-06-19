@@ -126,8 +126,9 @@ bool VertxBus::registerHandler(const std::string& address, const replyHandler& r
 
     m_hm_lock.lock();
     std::list<replyHandler>& handlers = m_handler_map[address];
+    bool do_reg = handlers.empty();
     handlers.push_back(reply_handler);
-    if (handlers.empty())
+    if (do_reg)
     {
         m_hm_lock.unlock();
         websocketpp::lib::error_code ec;
