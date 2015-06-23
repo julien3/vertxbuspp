@@ -22,7 +22,11 @@
 #pragma warning( disable : 4503 )
 #endif
 
+#ifdef VERTXBUSPP_TLS
+#include <websocketpp/config/asio_client.hpp>
+#else
 #include <websocketpp/config/asio_no_tls_client.hpp>
+#endif
 #include <websocketpp/client.hpp>
 #include <websocketpp/common/thread.hpp>
 
@@ -96,8 +100,17 @@ public:
     inline VertxBusState readyState() const { return m_state; }
 
 private:
+#ifdef VERTXBUSPP_TLS
+    typedef websocketpp::client<websocketpp::config::asio_tls_client> client_tls;
+    typedef websocketpp::config::asio_tls_client::message_type::ptr message_ptr_tls;
+    typedef websocketpp::lib::shared_ptr<asio::ssl::context> context_ptr_tls;
+
     typedef websocketpp::client<websocketpp::config::asio_client> client;
     typedef websocketpp::config::asio_client::message_type::ptr message_ptr;
+#else
+    typedef websocketpp::client<websocketpp::config::asio_client> client;
+    typedef websocketpp::config::asio_client::message_type::ptr message_ptr;
+#endif
 
     struct VertxReplyHandlers
     {
@@ -111,7 +124,17 @@ private:
 
     void on_fail(websocketpp::connection_hdl);
 
-    void on_message(websocketpp::connection_hdl hdl, message_ptr msg);
+    void on_message_plain(websocketpp::connection_hdl, message_ptr);
+
+#ifdef VERTXBUSPP_TLS
+    void on_message_tls(websocketpp::connection_hdl, message_ptr_tls);
+#endif
+
+    void on_message(websocketpp::connection_hdl, const std::string&);
+
+#ifdef VERTXBUSPP_TLS
+    context_ptr_tls on_tls_init(websocketpp::connection_hdl);
+#endif
 
     bool sendOrPub(const std::string& send_or_pub, const std::string& address, const Json::Value& message, const replyHandler& reply_handler = replyHandler(), const failureHandler& failure_handler = failureHandler());
 
@@ -122,6 +145,10 @@ private:
     void makeUUID(std::string& uuid);
 
     client m_client;
+#ifdef VERTXBUSPP_TLS
+    client_tls m_client_tls;
+#endif
+
     websocketpp::lib::thread* m_asio_thread;
     websocketpp::lib::thread* m_ping_thread;
     websocketpp::connection_hdl m_hdl;
@@ -139,6 +166,10 @@ private:
     std::function<void()> m_on_open;
     std::function<void()> m_on_close;
     std::function<void(const std::error_code&, const Json::Value&)> m_on_fail;
+
+#ifdef VERTXBUSPP_TLS
+    bool m_client_is_tls;
+#endif
 };
 
 #endif

@@ -21,6 +21,11 @@
 #include <uuid/uuid.h>
 #endif
 
+bool startsWith(const std::string& str, const std::string& start)
+{
+    return str.length() >= start.length() && str.compare(0, start.length(), start) == 0;
+}
+
 bool endsWith(const std::string& str, const std::string& end)
 {
     return str.length() >= end.length() && str.compare(str.length() - end.length(), end.length(), end) == 0;
@@ -48,12 +53,15 @@ m_asio_thread(NULL),
 m_ping_thread(NULL),
 m_state(CLOSED),
 m_do_ping(false)
+#ifdef VERTXBUSPP_TLS
+,m_client_is_tls(false)
+#endif
 {
     // set up access channels to log nothing
     m_client.clear_access_channels(websocketpp::log::alevel::all);
-    /*m_client.set_access_channels(websocketpp::log::alevel::connect);
+    m_client.set_access_channels(websocketpp::log::alevel::connect);
     m_client.set_access_channels(websocketpp::log::alevel::disconnect);
-    m_client.set_access_channels(websocketpp::log::alevel::app);*/
+    m_client.set_access_channels(websocketpp::log::alevel::app);
 
     // set up error channel to log nothing
     m_client.clear_error_channels(websocketpp::log::elevel::all);
@@ -65,7 +73,29 @@ m_do_ping(false)
     m_client.set_open_handler(websocketpp::lib::bind(&VertxBus::on_open, this, websocketpp::lib::placeholders::_1));
     m_client.set_close_handler(websocketpp::lib::bind(&VertxBus::on_close, this, websocketpp::lib::placeholders::_1));
     m_client.set_fail_handler(websocketpp::lib::bind(&VertxBus::on_fail, this, websocketpp::lib::placeholders::_1));
-    m_client.set_message_handler(websocketpp::lib::bind(&VertxBus::on_message, this, websocketpp::lib::placeholders::_1, websocketpp::lib::placeholders::_2));
+    m_client.set_message_handler(websocketpp::lib::bind(&VertxBus::on_message_plain, this, websocketpp::lib::placeholders::_1, websocketpp::lib::placeholders::_2));
+
+#ifdef VERTXBUSPP_TLS
+    // set up access channels to log nothing
+    m_client_tls.clear_access_channels(websocketpp::log::alevel::all);
+    m_client_tls.set_access_channels(websocketpp::log::alevel::connect);
+    m_client_tls.set_access_channels(websocketpp::log::alevel::disconnect);
+    m_client_tls.set_access_channels(websocketpp::log::alevel::app);
+
+    // set up error channel to log nothing
+    m_client_tls.clear_error_channels(websocketpp::log::elevel::all);
+
+    // Initialize the Asio transport policy
+    m_client_tls.init_asio();
+
+    // Bind the handlers we are using
+    m_client_tls.set_open_handler(websocketpp::lib::bind(&VertxBus::on_open, this, websocketpp::lib::placeholders::_1));
+    m_client_tls.set_close_handler(websocketpp::lib::bind(&VertxBus::on_close, this, websocketpp::lib::placeholders::_1));
+    m_client_tls.set_fail_handler(websocketpp::lib::bind(&VertxBus::on_fail, this, websocketpp::lib::placeholders::_1));
+    m_client_tls.set_message_handler(websocketpp::lib::bind(&VertxBus::on_message_tls, this, websocketpp::lib::placeholders::_1, websocketpp::lib::placeholders::_2));
+
+    m_client_tls.set_tls_init_handler(websocketpp::lib::bind(&VertxBus::on_tls_init, this, websocketpp::lib::placeholders::_1));
+#endif
 }
 
 VertxBus::~VertxBus()
@@ -79,7 +109,22 @@ VertxBus::~VertxBus()
 bool VertxBus::connect(const std::string& url, const std::function<void()>& on_open, const std::function<void()>& on_close, const std::function<void(const std::error_code&, const Json::Value&)>& on_fail, const VertxBusOptions& options)
 {
     if (m_state != CLOSED)
+    {
+#ifdef VERTXBUSPP_TLS
+        if (m_client_is_tls)
+        {
+            m_client_tls.get_alog().write(websocketpp::log::alevel::app,
+                "Connection Error: not in CLOSE state");
+        }
+        else
+#endif
+        {
+            m_client.get_alog().write(websocketpp::log::alevel::app,
+                "Connection Error: not in CLOSE state");
+        }
+        
         return false;
+    }
 
     m_on_open = on_open;
     m_on_close = on_close;
@@ -87,26 +132,55 @@ bool VertxBus::connect(const std::string& url, const std::function<void()>& on_o
     m_options = options;
     m_state = CONNECTING;
 
-    std::string final_url = url;
-    if (!endsWith(url, "/websocket"))
+    std::string final_url = url; 
+    std::transform(final_url.begin(), final_url.end(), final_url.begin(), ::tolower);
+    if (!endsWith(final_url, "/websocket"))
         final_url += "/websocket";
 
+#ifdef VERTXBUSPP_TLS
+    m_client_is_tls = startsWith(final_url, "https") || startsWith(final_url, "wss");
+#endif
+
     websocketpp::lib::error_code ec;
-    client::connection_ptr con = m_client.get_connection(final_url, ec);
-    if (ec)
+
+#ifdef VERTXBUSPP_TLS
+    if (m_client_is_tls)
     {
-        m_client.get_alog().write(websocketpp::log::alevel::app,
-            "Get Connection Error: " + ec.message());
-        return false;
+        client_tls::connection_ptr con = m_client_tls.get_connection(final_url, ec);
+        if (ec)
+        {
+            m_client_tls.get_alog().write(websocketpp::log::alevel::app,
+                "Connection Error: " + ec.message());
+            return false;
+        }
+
+        // Grab a handle for this connection so we can talk to it in a thread
+        // safe manor after the event loop starts.
+        m_hdl = con->get_handle();
+
+        // Queue the connection. No DNS queries or network connections will be
+        // made until the io_service event loop is run.
+        m_client_tls.connect(con);
     }
+    else
+#endif
+    {
+        client::connection_ptr con = m_client.get_connection(final_url, ec);
+        if (ec)
+        {
+            m_client.get_alog().write(websocketpp::log::alevel::app,
+                "Connection Error: " + ec.message());
+            return false;
+        }
 
-    // Grab a handle for this connection so we can talk to it in a thread
-    // safe manor after the event loop starts.
-    m_hdl = con->get_handle();
+        // Grab a handle for this connection so we can talk to it in a thread
+        // safe manor after the event loop starts.
+        m_hdl = con->get_handle();
 
-    // Queue the connection. No DNS queries or network connections will be
-    // made until the io_service event loop is run.
-    m_client.connect(con);
+        // Queue the connection. No DNS queries or network connections will be
+        // made until the io_service event loop is run.
+        m_client.connect(con);
+    }
 
     // Create a thread to run the ASIO io_service event loop
     if (m_asio_thread)
@@ -114,7 +188,17 @@ bool VertxBus::connect(const std::string& url, const std::function<void()>& on_o
         m_asio_thread->join();
         delete m_asio_thread;
     }
-    m_asio_thread = new websocketpp::lib::thread(&client::run, &m_client);
+
+#ifdef VERTXBUSPP_TLS
+    if (m_client_is_tls)
+    {
+        m_asio_thread = new websocketpp::lib::thread(&client_tls::run, &m_client_tls);
+    }
+    else
+#endif
+    {
+        m_asio_thread = new websocketpp::lib::thread(&client::run, &m_client);
+    }
 
     return true;
 }
@@ -134,7 +218,17 @@ bool VertxBus::registerHandler(const std::string& address, const replyHandler& r
         std::string msg = "{\"type\": \"register\", \"address\": \"";
         msg += address;
         msg += "\"}";
-        m_client.send(m_hdl, msg, websocketpp::frame::opcode::text, ec);
+
+#ifdef VERTXBUSPP_TLS
+        if (m_client_is_tls)
+        {
+            m_client_tls.send(m_hdl, msg, websocketpp::frame::opcode::text, ec);
+        }
+        else
+#endif
+        {
+            m_client.send(m_hdl, msg, websocketpp::frame::opcode::text, ec);
+        }
 
         return !ec;
     }
@@ -181,7 +275,16 @@ bool VertxBus::unregisterHandler(const std::string& address, const replyHandler&
             std::string msg = "{\"type\": \"unregister\", \"address\": \"";
             msg += address;
             msg += "\"}";
-            m_client.send(m_hdl, msg, websocketpp::frame::opcode::text, ec);
+#ifdef VERTXBUSPP_TLS
+            if (m_client_is_tls)
+            {
+                m_client_tls.send(m_hdl, msg, websocketpp::frame::opcode::text, ec);
+            }
+            else
+#endif
+            {
+                m_client.send(m_hdl, msg, websocketpp::frame::opcode::text, ec);
+            }
 
             return !ec;
         }
@@ -197,7 +300,16 @@ bool VertxBus::close()
     if (m_state != OPEN) return false;
 
     websocketpp::lib::error_code ec;
-    m_client.close(m_hdl, websocketpp::close::status::normal, "", ec);
+#ifdef VERTXBUSPP_TLS
+    if (m_client_is_tls)
+    {
+        m_client_tls.close(m_hdl, websocketpp::close::status::normal, "", ec);
+    }
+    else
+#endif
+    {
+        m_client.close(m_hdl, websocketpp::close::status::normal, "", ec);
+    }
 
     if (!ec)
         m_state = CLOSING;
@@ -247,15 +359,38 @@ void VertxBus::on_close(websocketpp::connection_hdl)
 void VertxBus::on_fail(websocketpp::connection_hdl hdl)
 {
     if (m_on_fail)
-        m_on_fail(m_client.get_con_from_hdl(hdl).get()->get_ec(), Json::Value());
+    {
+#ifdef VERTXBUSPP_TLS
+        if (m_client_is_tls)
+        {
+            m_on_fail(m_client_tls.get_con_from_hdl(hdl).get()->get_ec(), Json::Value());
+        }
+        else
+#endif
+        {
+            m_on_fail(m_client.get_con_from_hdl(hdl).get()->get_ec(), Json::Value());
+        }
+    }
 }
 
-void VertxBus::on_message(websocketpp::connection_hdl hdl, message_ptr msg)
+void VertxBus::on_message_plain(websocketpp::connection_hdl hdl, message_ptr msg)
+{
+    on_message(hdl, msg.get()->get_payload());
+}
+
+#ifdef VERTXBUSPP_TLS
+void VertxBus::on_message_tls(websocketpp::connection_hdl hdl, message_ptr_tls msg)
+{
+    on_message(hdl, msg.get()->get_payload());
+}
+#endif
+
+void VertxBus::on_message(websocketpp::connection_hdl hdl, const std::string& payload)
 {
     Json::Reader reader;
     Json::Value json;
 
-    if (reader.parse(msg.get()->get_payload(), json))
+    if (reader.parse(payload, json))
     {
         if (json.isMember("type") && json["type"].isString() && json["type"].asString() == "err")
         {
@@ -267,7 +402,16 @@ void VertxBus::on_message(websocketpp::connection_hdl hdl, message_ptr msg)
             {
                 std::string err_msg = "Error received on connection: ";
                 err_msg += json.get("body", "").asString();
-                m_client.get_alog().write(websocketpp::log::alevel::app, err_msg);
+#ifdef VERTXBUSPP_TLS
+                if (m_client_is_tls)
+                {
+                    m_client_tls.get_alog().write(websocketpp::log::alevel::app, err_msg);
+                }
+                else
+#endif
+                {
+                    m_client.get_alog().write(websocketpp::log::alevel::app, err_msg);
+                }
             }
 
             return;
@@ -326,6 +470,27 @@ void VertxBus::on_message(websocketpp::connection_hdl hdl, message_ptr msg)
     }
 }
 
+#ifdef VERTXBUSPP_TLS
+VertxBus::context_ptr_tls VertxBus::on_tls_init(websocketpp::connection_hdl hdl)
+{
+    context_ptr_tls ctx = websocketpp::lib::make_shared<asio::ssl::context>(asio::ssl::context::tlsv1);
+
+    try
+    {
+        ctx->set_options(asio::ssl::context::default_workarounds |
+            asio::ssl::context::no_sslv2 |
+            asio::ssl::context::no_sslv3 |
+            asio::ssl::context::single_dh_use);
+    }
+    catch (std::exception& e)
+    {
+        std::cerr << e.what() << std::endl;
+    }
+
+    return ctx;
+}
+#endif
+
 bool VertxBus::sendOrPub(const std::string& send_or_pub, const std::string& address, const Json::Value& message, const replyHandler& reply_handler, const failureHandler& failure_handler)
 {
     if (m_state != OPEN) return false;
@@ -347,7 +512,16 @@ bool VertxBus::sendOrPub(const std::string& send_or_pub, const std::string& addr
 
     Json::FastWriter writer;
     websocketpp::lib::error_code ec;
-    m_client.send(m_hdl, writer.write(envelope), websocketpp::frame::opcode::text, ec);
+#ifdef VERTXBUSPP_TLS
+    if (m_client_is_tls)
+    {
+        m_client_tls.send(m_hdl, writer.write(envelope), websocketpp::frame::opcode::text, ec);
+    }
+    else
+#endif
+    {
+        m_client.send(m_hdl, writer.write(envelope), websocketpp::frame::opcode::text, ec);
+    }
 
     return !ec;
 }
@@ -357,7 +531,16 @@ bool VertxBus::sendPing()
     if (m_state != OPEN) return false;
 
     websocketpp::lib::error_code ec;
-    m_client.send(m_hdl, "{\"type\": \"ping\"}", websocketpp::frame::opcode::text, ec);
+#ifdef VERTXBUSPP_TLS
+    if (m_client_is_tls)
+    {
+        m_client_tls.send(m_hdl, "{\"type\": \"ping\"}", websocketpp::frame::opcode::text, ec);
+    }
+    else
+#endif
+    {
+        m_client.send(m_hdl, "{\"type\": \"ping\"}", websocketpp::frame::opcode::text, ec);
+    }
 
     return !ec;
 }
@@ -366,11 +549,7 @@ void VertxBus::sendPingInterval()
 {
     while (m_do_ping)
     {
-#ifdef _WEBSOCKETPP_CPP11_THREAD_
         std::this_thread::sleep_for(std::chrono::milliseconds(m_options.ping_interval));
-#else
-        boost::this_thread::sleep_for(std::chrono::milliseconds(m_options.ping_interval));
-#endif
         sendPing();
     }
 }
