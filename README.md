@@ -17,7 +17,7 @@ and consisting of two files (VertxBus header and source) plus lightweight main d
 # Using vertxbuspp with TLS support
 * Link with `libssl/OpenSSL`.
 * Add `VERTXBUSPP_TLS` to your preprocessor definitions.
-* The example `ssl_tls` can be added to the cmake build with `SSL_EXAMPLE=ON`.
+* The example `ssl_tls` can be added to the cmake build with `SSL_EXAMPLE=ON` (on Windows, don't forget to copy your OpenSSJL DLLs to avoid an Ordinal 313 error).
 
 # Dependencies
 * Windows / Visual Studio : `rpcrt4.lib` (already pragma'ed).

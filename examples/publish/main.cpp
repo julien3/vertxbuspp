@@ -1,4 +1,4 @@
-// Copyright 2015 Julien Lehuraux
+// Copyright 2015-2017 Julien Lehuraux
 
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,37 +14,34 @@
 
 #include "VertxBus.h"
 
-int main(int argc, char* argv[])
-{
+int main(int argc, char* argv[]) {
     int iter_counter = 0;
     VertxBus vertxeb;
-    vertxeb.connect("http://localhost:8080/eventbus", 
+    vertxeb.Connect("http://localhost:8080/eventbus", 
     [&] {
-        // OnOpen
-        vertxeb.registerHandler("test.pub", [&](const Json::Value& jmsg, const VertxBus::VertxBusReplier& vbr) {
-            Json::StyledWriter writer;
-            std::cout << "Received:\n" << writer.write(jmsg) << std::endl;
+      // OnOpen
+      vertxeb.RegisterHandler("test.pub", VertxBus::ReplyHandler([&](const Json::Value& jmsg, const VertxBus::VertxBusReplier& vbr) {
+        Json::StyledWriter writer;
+        std::cout << "Received:\n" << writer.write(jmsg["body"]) << std::endl;
 
-            if (++iter_counter == 5)
-                vertxeb.close();
-        });
+        if(++iter_counter == 5) vertxeb.Close();
+      }));
     }, 
-    [&] {
-        // OnClose
-        std::cout << "Connection closed." << std::endl;
+    [&](const std::error_code& ec) {
+      // OnClose
+      std::cout << "Connection closed." << std::endl;
     },
-    [&] (const std::error_code& ec, const Json::Value& jmsg_fail) {
-        // OnFail
-        std::cerr << "Connection failed: " << ec.message() << std::endl;
+    [&](const std::error_code& ec, const Json::Value& jmsg_fail) {
+      // OnFail
+      std::cerr << "Connection failed: " << ec.message() << std::endl;
 
-        if (!jmsg_fail.empty())
-        {
-            Json::StyledWriter writer;
-            std::cerr << writer.write(jmsg_fail) << std::endl;
-        }
+      if(!jmsg_fail.empty()) {
+        Json::StyledWriter writer;
+        std::cerr << writer.write(jmsg_fail) << std::endl;
+      }
     });
 
-    vertxeb.waitClosed();
+    vertxeb.WaitClosed();
 
     return 0;
 }

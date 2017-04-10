@@ -203,7 +203,11 @@ const asio::error_code& engine::map_error_code(
   if (BIO_wpending(ext_bio_))
   {
     ec = asio::error_code(
+#ifdef OPENSSL_IS_BORINGSSL
+        ERR_PACK(ERR_LIB_SSL, SSL_R_SHORT_READ),
+#else
         ERR_PACK(ERR_LIB_SSL, 0, SSL_R_SHORT_READ),
+#endif
         asio::error::get_ssl_category());
     return ec;
   }
@@ -217,7 +221,11 @@ const asio::error_code& engine::map_error_code(
   if ((::SSL_get_shutdown(ssl_) & SSL_RECEIVED_SHUTDOWN) == 0)
   {
     ec = asio::error_code(
+#ifdef OPENSSL_IS_BORINGSSL
+        ERR_PACK(ERR_LIB_SSL, SSL_R_SHORT_READ),
+#else
         ERR_PACK(ERR_LIB_SSL, 0, SSL_R_SHORT_READ),
+#endif
         asio::error::get_ssl_category());
   }
 

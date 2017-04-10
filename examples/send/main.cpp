@@ -1,4 +1,4 @@
-// Copyright 2015 Julien Lehuraux
+// Copyright 2015-2017 Julien Lehuraux
 
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,36 +14,34 @@
 
 #include "VertxBus.h"
 
-int main(int argc, char* argv[])
-{
-    VertxBus vertxeb;
-    vertxeb.connect("http://localhost:8080/eventbus", 
-    [&] {
-        // OnOpen
-        Json::Value jval;
-        jval["name"] = "John";
-        vertxeb.send("test.hello", jval, [&](const Json::Value& jmsg, const VertxBus::VertxBusReplier& vbr) {
-            Json::StyledWriter writer;
-            std::cout << "Received:\n" << writer.write(jmsg) << std::endl;
-            vertxeb.close();
-        });
-    }, 
-    [&] {
-        // OnClose
-        std::cout << "Connection closed." << std::endl;
-    },
-    [&] (const std::error_code& ec, const Json::Value& jmsg_fail) {
-        // OnFail
-        std::cerr << "Connection failed: " << ec.message() << std::endl;
+int main(int argc, char* argv[]) {
+  VertxBus vertxeb;
+  vertxeb.Connect("http://localhost:8080/eventbus", 
+  [&] {
+    // OnOpen
+    Json::Value jval;
+    jval["name"] = "John";
+    vertxeb.Send("test.hello", jval, VertxBus::ReplyHandler([&](const Json::Value& jmsg, const VertxBus::VertxBusReplier& vbr) {
+      Json::StyledWriter writer;
+      std::cout << "Received:\n" << writer.write(jmsg["body"]) << std::endl;
+      vertxeb.Close();
+    }));
+  }, 
+  [&](const std::error_code& ec) {
+    // OnClose
+    std::cout << "Connection closed." << std::endl;
+  },
+  [&](const std::error_code& ec, const Json::Value& jmsg_fail) {
+    // OnFail
+    std::cerr << "Connection failed: " << ec.message() << std::endl;
 
-        if (!jmsg_fail.empty())
-        {
-            Json::StyledWriter writer;
-            std::cerr << writer.write(jmsg_fail) << std::endl;
-        }
-    });
+    if (!jmsg_fail.empty()) {
+      Json::StyledWriter writer;
+      std::cerr << writer.write(jmsg_fail) << std::endl;
+    }
+  });
 
-    vertxeb.waitClosed();
+  vertxeb.WaitClosed();
 
-    return 0;
+  return 0;
 }
